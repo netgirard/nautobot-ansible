@@ -91,6 +91,11 @@ options:
       default: False
       type: boolean
       version_added: "4.6.0"
+  enforce_valid_group_names:
+      description: Enforce valid group names (replaces hyphens and spaces with underscores) and lowercase
+      default: False
+      type: boolean
+      version_added: "X.X.X"
   page_size:
     description: Number of items to retrieve per page. Default is 0, which means all items will be retrieved.
     type: int
@@ -316,12 +321,18 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             if device[var]:
                 self.add_variable(device["name"], device[var], var)
 
+    @staticmethod
+    def _remove_invalid_group_chars(group):
+        # Removes spaces and hyphens which Ansible doesn't like and converts to lowercase.
+        return group.replace("-", "_").replace(" ", "_").lower()
+
     def create_groups(self, device):
         """Create groups specified and add device to group."""
         device_name = device["name"]
         for group_by_path in self.group_by:
             parent_attr, *chain = group_by_path.split(".")
             device_attr = device.get(parent_attr)
+
             if device_attr is None:
                 self.display.display(f"Could not find value for {parent_attr} on device {device_name}")
                 continue
@@ -335,8 +346,13 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
             if not chain:
                 group_name = device_attr
+                prefix = parent_attr
 
             while chain:
+                try:
+                    prefix = group_name
+                except NameError:
+                    prefix = parent_attr
                 group_name = chain.pop(0)
                 if isinstance(device_attr.get(group_name), Mapping):
                     device_attr = device_attr.get(group_name)
@@ -362,6 +378,10 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
             if isinstance(group_name, str):
                 # If using force_valid_group_names=always in ansible.cfg, hyphens in Nautobot names will be converted to underscores
+                if not self.group_names_raw:
+                    group_name = f"{prefix}_{group_name}"
+                if self.enforce_valid_group_names:
+                    group_name = self._remove_invalid_group_chars(group_name)
                 group = self.inventory.add_group(group_name)
                 self.inventory.add_child(group, device_name)
             else:
@@ -375,6 +395,8 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         for tag in device.get("tags", []):
             if tag.get(tag_attr):
                 group_name = f"tags_{tag[tag_attr]}" if not self.group_names_raw else tag[tag_attr]
+                if self.enforce_valid_group_names:
+                    group_name = self._remove_invalid_group_chars(group_name)
                 group = self.inventory.add_group(group_name)
                 self.inventory.add_child(group, device_name)
             else:
@@ -537,6 +559,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         self.group_by = self.get_option("group_by")
         self.follow_redirects = self.get_option("follow_redirects")
         self.group_names_raw = self.get_option("group_names_raw")
+        self.enforce_valid_group_names = self.get_option("enforce_valid_group_names")
         self.user_cache_setting = self.get_option("cache")
         self.page_size = self.get_option("page_size")
 
